@@ -1,0 +1,921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Winding Machine — Fourier Transform Intuition</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0a1224; }
+  #root { width: 100%; }
+  /* graceful loading state before React mounts */
+  #boot {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: #0a1224; color: #7d8aa6;
+    font-family: 'Space Mono', ui-monospace, monospace; font-size: 13px;
+    letter-spacing: 0.2em;
+  }
+  #boot.gone { display: none; }
+</style>
+</head>
+<body>
+<div id="boot">LOADING THE WINDING MACHINE…</div>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+
+// ---------------------------------------------------------------------------
+//  THE WINDING MACHINE — a Fourier transform intuition built step by step
+//
+//  Stages:
+//   0  RAW       straight signal in time domain
+//   1  WIND      transition: the wave peels off the axis and wraps a circle
+//   2  COM       show center of mass for one winding frequency
+//   3  SWEEP     scrub the winding frequency, watch the COM-x spike at f
+// ---------------------------------------------------------------------------
+
+const NAVY = "#0a1224";
+const NAVY_2 = "#0d1a30";
+const INK = "#e8edf7";
+const MUTE = "#7d8aa6";
+const GRID = "#1c2c47";
+const AMBER = "#f5b042";
+const CYAN = "#4fd1c5";
+const ROSE = "#f06a8a";
+
+// the signal: sum of two pure cosines. these are the "real" frequencies.
+const COMPONENTS = [
+  { freq: 2, amp: 1.0 },
+  { freq: 3, amp: 0.6 },
+];
+const signal = (t) =>
+  COMPONENTS.reduce(
+    (s, c) => s + c.amp * Math.cos(2 * Math.PI * c.freq * t),
+    0
+  );
+const SIG_MAX = COMPONENTS.reduce((s, c) => s + c.amp, 0); // ~1.6
+
+const T_MAX = 4; // seconds of signal
+const SAMPLES = 900;
+const samples = Array.from({ length: SAMPLES }, (_, i) => {
+  const t = (i / (SAMPLES - 1)) * T_MAX;
+  return { t, v: signal(t) };
+});
+
+// center of mass of the wound graph at winding frequency xi
+function centerOfMass(xi) {
+  let cx = 0,
+    cy = 0;
+  for (let i = 0; i < SAMPLES; i++) {
+    const { t, v } = samples[i];
+    const ang = -2 * Math.PI * xi * t; // e^{-2 pi i xi t}
+    const r = (v + SIG_MAX) / (2 * SIG_MAX); // remap to [0,1] so radius is positive
+    cx += r * Math.cos(ang);
+    cy += r * Math.sin(ang);
+  }
+  return { x: cx / SAMPLES, y: cy / SAMPLES };
+}
+
+// full transform magnitude (x-coordinate of COM) across a frequency range
+const SWEEP_PTS = 260;
+const SWEEP_MAX = 5.5;
+const spectrum = Array.from({ length: SWEEP_PTS }, (_, i) => {
+  const xi = (i / (SWEEP_PTS - 1)) * SWEEP_MAX;
+  const c = centerOfMass(xi);
+  return { xi, mag: c.x };
+});
+const SPEC_MIN = Math.min(...spectrum.map((s) => s.mag));
+const SPEC_MAX = Math.max(...spectrum.map((s) => s.mag));
+
+const STAGES = [
+  {
+    key: "RAW",
+    label: "The signal",
+    note:
+      "A signal in time. It hides two pure frequencies — the winding machine will find them.",
+  },
+  {
+    key: "WIND",
+    label: "Wrap it around a circle",
+    note:
+      "Peel the wave off the time axis and wind it around the origin at winding frequency ξ. Each instant becomes a point f(t)·e^(−2πiξt).",
+  },
+  {
+    key: "COM",
+    label: "Track the center of mass",
+    note:
+      "Average all the wound points. Its x-coordinate is the strength of frequency ξ in the signal.",
+  },
+  {
+    key: "SWEEP",
+    label: "Sweep ξ — the transform appears",
+    note:
+      "Slide the winding frequency. The center of mass drifts near zero, then lurches outward exactly when ξ matches a real frequency.",
+  },
+];
+
+function WindingMachine() {
+  const [stage, setStage] = useState(0);
+  const [xi, setXi] = useState(0.6); // winding frequency
+  const [windT, setWindT] = useState(0); // 0 = straight, 1 = fully wound
+  const [auto, setAuto] = useState(false);
+  const raf = useRef(0);
+  const lastTime = useRef(0);
+
+  // ---- animate the wind/unwind transition when the stage changes ----------
+  const windRef = useRef(0); // authoritative current value
+  useEffect(() => {
+    const target = stage >= 1 ? 1 : 0;
+    let id = 0;
+    let alive = true;
+    const tick = () => {
+      if (!alive) return;
+      const cur = windRef.current;
+      const d = target - cur;
+      if (Math.abs(d) < 0.0015) {
+        windRef.current = target;
+        setWindT(target);
+        return; // settled — stop the loop entirely
+      }
+      const next = cur + d * 0.12;
+      windRef.current = next;
+      setWindT(next);
+      id = requestAnimationFrame(tick);
+    };
+    id = requestAnimationFrame(tick);
+    return () => {
+      alive = false;
+      cancelAnimationFrame(id);
+    };
+  }, [stage]);
+
+  // ---- auto sweep of the winding frequency in the SWEEP stage -------------
+  useEffect(() => {
+    if (!auto || stage < 3) return;
+    const step = (ts) => {
+      if (!lastTime.current) lastTime.current = ts;
+      const dt = (ts - lastTime.current) / 1000;
+      lastTime.current = ts;
+      setXi((x) => {
+        let nx = x + dt * 0.55;
+        if (nx > SWEEP_MAX) nx = 0;
+        return nx;
+      });
+      raf.current = requestAnimationFrame(step);
+    };
+    raf.current = requestAnimationFrame(step);
+    return () => {
+      cancelAnimationFrame(raf.current);
+      lastTime.current = 0;
+    };
+  }, [auto, stage]);
+
+  const com = useMemo(() => centerOfMass(xi), [xi]);
+
+  const stageObj = STAGES[stage];
+
+  return (
+    <div style={S.root}>
+      <style>{CSS}</style>
+
+      <header style={S.header}>
+        <div style={S.kicker}>FOURIER · INTUITION</div>
+        <h1 style={S.title}>The Winding Machine</h1>
+        <p style={S.sub}>
+          How a transform unmasks the frequencies buried inside a signal
+        </p>
+      </header>
+
+      {/* stepper ---------------------------------------------------------- */}
+      <div style={S.stepper}>
+        {STAGES.map((s, i) => (
+          <button
+            key={s.key}
+            onClick={() => setStage(i)}
+            style={{
+              ...S.step,
+              ...(i === stage ? S.stepActive : {}),
+              ...(i < stage ? S.stepDone : {}),
+            }}
+          >
+            <span style={S.stepNum}>{i + 1}</span>
+            <span style={S.stepLabel}>{s.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div style={S.stageBoard}>
+        <Visualization
+          stage={stage}
+          xi={xi}
+          windT={windT}
+          com={com}
+        />
+
+        {/* narration + controls ----------------------------------------- */}
+        <aside style={S.panel}>
+          <div style={S.panelTag}>
+            STEP {stage + 1} / {STAGES.length}
+          </div>
+          <h2 style={S.panelTitle}>{stageObj.label}</h2>
+          <p style={S.panelNote}>{stageObj.note}</p>
+
+          {stage >= 2 && (
+            <div style={S.readout}>
+              <Stat
+                label="winding ξ"
+                value={xi.toFixed(2) + " Hz"}
+                color={CYAN}
+              />
+              <Stat
+                label="COM·x  (transform)"
+                value={com.x.toFixed(3)}
+                color={AMBER}
+                emphatic={com.x > 0.12}
+              />
+              <Stat
+                label="COM·y"
+                value={com.y.toFixed(3)}
+                color={MUTE}
+              />
+            </div>
+          )}
+
+          {stage >= 3 && (
+            <>
+              <label style={S.sliderLabel}>
+                winding frequency ξ — drag to hunt
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={SWEEP_MAX}
+                step={0.005}
+                value={xi}
+                onChange={(e) => {
+                  setAuto(false);
+                  setXi(parseFloat(e.target.value));
+                }}
+                style={S.slider}
+                className="wm-slider"
+              />
+              <button
+                onClick={() => {
+                  lastTime.current = 0;
+                  setAuto((a) => !a);
+                }}
+                style={{
+                  ...S.sweepBtn,
+                  ...(auto ? S.sweepBtnOn : {}),
+                }}
+              >
+                {auto ? "■  pause sweep" : "▶  auto sweep"}
+              </button>
+              <div style={S.hint}>
+                Real frequencies live at{" "}
+                <b style={{ color: ROSE }}>2 Hz</b> and{" "}
+                <b style={{ color: ROSE }}>3 Hz</b>. Watch the spike land.
+              </div>
+            </>
+          )}
+
+          <div style={S.nav}>
+            <button
+              style={S.navBtn}
+              disabled={stage === 0}
+              onClick={() => setStage((s) => Math.max(0, s - 1))}
+            >
+              ← back
+            </button>
+            <button
+              style={{ ...S.navBtn, ...S.navBtnPrimary }}
+              disabled={stage === STAGES.length - 1}
+              onClick={() => setStage((s) => Math.min(3, s + 1))}
+            >
+              next →
+            </button>
+          </div>
+        </aside>
+      </div>
+
+      {stage >= 3 && <SpectrumStrip xi={xi} />}
+
+      <footer style={S.footer}>
+        <span>
+          signal · cos 2πt scaled + 0.6 cos 3πt&nbsp;·&nbsp;wound graph
+          radius is the signal amplitude at each instant
+        </span>
+      </footer>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  MAIN CANVAS
+// ---------------------------------------------------------------------------
+function Visualization({ stage, xi, windT, com }) {
+  const W = 620,
+    H = 470;
+  const cx = W * 0.5,
+    cy = H * 0.5;
+  const R = 150; // radius scale of the wound graph
+
+  // straight-wave geometry
+  const axisY = cy;
+  const axisX0 = 56;
+  const axisX1 = W - 40;
+  const axisLen = axisX1 - axisX0;
+
+  // build the polyline. windT in [0,1] interpolates straight -> wound.
+  const path = useMemo(() => {
+    const pts = [];
+    for (let i = 0; i < SAMPLES; i += 2) {
+      const { t, v } = samples[i];
+      const frac = t / T_MAX;
+
+      // straight position
+      const sx = axisX0 + frac * axisLen;
+      const sy = axisY - (v / SIG_MAX) * 70;
+
+      // wound position
+      const ang = -2 * Math.PI * xi * t;
+      const r = ((v + SIG_MAX) / (2 * SIG_MAX)) * R;
+      const wx = cx + r * Math.cos(ang);
+      const wy = cy + r * Math.sin(ang);
+
+      // ease the blend so the unrolling feels physical
+      const e = windT * windT * (3 - 2 * windT);
+      pts.push([sx + (wx - sx) * e, sy + (wy - sy) * e]);
+    }
+    return pts;
+  }, [xi, windT]);
+
+  const d = useMemo(
+    () =>
+      path
+        .map(([x, y], i) => (i === 0 ? `M${x},${y}` : `L${x},${y}`))
+        .join(" "),
+    [path]
+  );
+
+  const comX = cx + com.x * R * 2;
+  const comY = cy + com.y * R * 2;
+  const comFar = Math.hypot(com.x, com.y) > 0.06;
+
+  return (
+    <div style={S.canvasWrap}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto" }}>
+        <defs>
+          <radialGradient id="vig" cx="50%" cy="46%" r="72%">
+            <stop offset="0%" stopColor={NAVY_2} />
+            <stop offset="100%" stopColor={NAVY} />
+          </radialGradient>
+          <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor={CYAN} />
+            <stop offset="55%" stopColor="#7fd0e8" />
+            <stop offset="100%" stopColor={AMBER} />
+          </linearGradient>
+          <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur stdDeviation="3.4" result="b" />
+            <feMerge>
+              <feMergeNode in="b" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
+        </defs>
+
+        <rect width={W} height={H} fill="url(#vig)" />
+
+        {/* polar grid (fades in with the winding) ---------------------- */}
+        <g
+          style={{
+            opacity: windT * 0.55,
+            transition: "opacity .2s",
+          }}
+        >
+          {[0.33, 0.66, 1].map((k) => (
+            <circle
+              key={k}
+              cx={cx}
+              cy={cy}
+              r={R * k}
+              fill="none"
+              stroke={GRID}
+              strokeWidth="1"
+            />
+          ))}
+          {[0, 45, 90, 135].map((a) => {
+            const rad = (a * Math.PI) / 180;
+            return (
+              <line
+                key={a}
+                x1={cx - R * Math.cos(rad)}
+                y1={cy - R * Math.sin(rad)}
+                x2={cx + R * Math.cos(rad)}
+                y2={cy + R * Math.sin(rad)}
+                stroke={GRID}
+                strokeWidth="1"
+              />
+            );
+          })}
+        </g>
+
+        {/* time axis (fades out as it winds) --------------------------- */}
+        <g style={{ opacity: 1 - windT }}>
+          <line
+            x1={axisX0}
+            y1={axisY}
+            x2={axisX1}
+            y2={axisY}
+            stroke={GRID}
+            strokeWidth="1.5"
+          />
+          {[0, 1, 2, 3, 4].map((s) => {
+            const x = axisX0 + (s / T_MAX) * axisLen;
+            return (
+              <g key={s}>
+                <line
+                  x1={x}
+                  y1={axisY - 5}
+                  x2={x}
+                  y2={axisY + 5}
+                  stroke={MUTE}
+                  strokeWidth="1"
+                />
+                <text x={x} y={axisY + 22} style={S.axisTxt}>
+                  {s}s
+                </text>
+              </g>
+            );
+          })}
+          <text x={axisX1} y={axisY - 14} style={S.axisLbl}>
+            time →
+          </text>
+        </g>
+
+        {/* origin marker for the wound view --------------------------- */}
+        <g style={{ opacity: windT }}>
+          <circle cx={cx} cy={cy} r="3" fill={MUTE} />
+          <line
+            x1={cx - R - 10}
+            y1={cy}
+            x2={cx + R + 10}
+            y2={cy}
+            stroke={GRID}
+            strokeWidth="1"
+            strokeDasharray="2 4"
+          />
+        </g>
+
+        {/* the signal itself ------------------------------------------ */}
+        <path
+          d={d}
+          fill="none"
+          stroke="url(#wave)"
+          strokeWidth="2.4"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+          filter="url(#glow)"
+          opacity="0.95"
+        />
+
+        {/* center of mass --------------------------------------------- */}
+        {stage >= 2 && windT > 0.85 && (
+          <g style={{ transition: "opacity .3s" }}>
+            <line
+              x1={cx}
+              y1={cy}
+              x2={comX}
+              y2={comY}
+              stroke={AMBER}
+              strokeWidth="1.5"
+              strokeDasharray="3 3"
+              opacity="0.6"
+            />
+            {/* projection onto x-axis = the transform value */}
+            <line
+              x1={comX}
+              y1={comY}
+              x2={comX}
+              y2={cy}
+              stroke={AMBER}
+              strokeWidth="1"
+              strokeDasharray="2 3"
+              opacity="0.45"
+            />
+            <circle
+              cx={comX}
+              cy={comY}
+              r={comFar ? 9 : 6}
+              fill={AMBER}
+              filter="url(#glow)"
+              style={{ transition: "r .25s" }}
+            />
+            <circle
+              cx={comX}
+              cy={cy}
+              r="4"
+              fill="none"
+              stroke={AMBER}
+              strokeWidth="1.5"
+            />
+            <text
+              x={comX + 12}
+              y={comY - 8}
+              style={{ ...S.comTxt, fill: AMBER }}
+            >
+              center of mass
+            </text>
+          </g>
+        )}
+
+        {/* big readout in sweep mode ---------------------------------- */}
+        {stage >= 3 && (
+          <text x={W - 28} y={40} style={S.bigXi}>
+            ξ = {xi.toFixed(2)} Hz
+          </text>
+        )}
+      </svg>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  SPECTRUM STRIP — the assembled transform
+// ---------------------------------------------------------------------------
+function SpectrumStrip({ xi }) {
+  const W = 920,
+    H = 150,
+    pad = 38;
+  const x = (f) => pad + (f / SWEEP_MAX) * (W - pad * 2);
+  const y = (m) =>
+    H - 30 - ((m - SPEC_MIN) / (SPEC_MAX - SPEC_MIN || 1)) * (H - 56);
+
+  const d = spectrum
+    .map((s, i) => `${i === 0 ? "M" : "L"}${x(s.xi)},${y(s.mag)}`)
+    .join(" ");
+  const area = `${d} L${x(SWEEP_MAX)},${y(SPEC_MIN)} L${x(0)},${y(
+    SPEC_MIN
+  )} Z`;
+
+  return (
+    <div style={S.specWrap}>
+      <div style={S.specHead}>
+        ASSEMBLED TRANSFORM&nbsp;&nbsp;·&nbsp;&nbsp;center-of-mass x vs. winding ξ
+      </div>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        style={{ width: "100%", height: "auto" }}
+        preserveAspectRatio="none"
+      >
+        <defs>
+          <linearGradient id="sg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={AMBER} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={AMBER} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {[1, 2, 3, 4, 5].map((f) => (
+          <g key={f}>
+            <line
+              x1={x(f)}
+              y1={14}
+              x2={x(f)}
+              y2={H - 26}
+              stroke={GRID}
+              strokeWidth="1"
+            />
+            <text x={x(f)} y={H - 8} style={S.axisTxt}>
+              {f} Hz
+            </text>
+          </g>
+        ))}
+
+        {/* the two real frequencies */}
+        {COMPONENTS.map((c) => (
+          <line
+            key={c.freq}
+            x1={x(c.freq)}
+            y1={14}
+            x2={x(c.freq)}
+            y2={H - 26}
+            stroke={ROSE}
+            strokeWidth="1.4"
+            strokeDasharray="4 4"
+            opacity="0.7"
+          />
+        ))}
+
+        <path d={area} fill="url(#sg)" />
+        <path
+          d={d}
+          fill="none"
+          stroke={AMBER}
+          strokeWidth="2.4"
+          strokeLinejoin="round"
+        />
+
+        {/* live cursor */}
+        <line
+          x1={x(xi)}
+          y1={14}
+          x2={x(xi)}
+          y2={H - 26}
+          stroke={CYAN}
+          strokeWidth="2"
+        />
+        <circle
+          cx={x(xi)}
+          cy={y(centerOfMass(xi).x)}
+          r="5"
+          fill={CYAN}
+        />
+      </svg>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  SMALL PIECES
+// ---------------------------------------------------------------------------
+function Stat({ label, value, color, emphatic }) {
+  return (
+    <div style={S.stat}>
+      <span style={S.statLabel}>{label}</span>
+      <span
+        style={{
+          ...S.statValue,
+          color,
+          textShadow: emphatic ? `0 0 14px ${color}` : "none",
+          transition: "text-shadow .2s",
+        }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+//  STYLES
+// ---------------------------------------------------------------------------
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Space+Mono:wght@400;700&display=swap');
+* { box-sizing: border-box; }
+.wm-slider { -webkit-appearance:none; appearance:none; height:4px; border-radius:4px;
+  background:linear-gradient(90deg, ${CYAN}, ${AMBER}); outline:none; }
+.wm-slider::-webkit-slider-thumb { -webkit-appearance:none; width:18px; height:18px;
+  border-radius:50%; background:${INK}; border:3px solid ${CYAN};
+  cursor:pointer; box-shadow:0 0 12px ${CYAN}88; }
+.wm-slider::-moz-range-thumb { width:18px; height:18px; border-radius:50%;
+  background:${INK}; border:3px solid ${CYAN}; cursor:pointer; }
+`;
+
+const mono = "'Space Mono', ui-monospace, monospace";
+const serif = "'Fraunces', Georgia, serif";
+
+const S = {
+  root: {
+    fontFamily: mono,
+    background: `radial-gradient(1200px 700px at 50% -10%, ${NAVY_2}, ${NAVY} 60%)`,
+    color: INK,
+    minHeight: "100vh",
+    padding: "30px 26px 40px",
+  },
+  header: { textAlign: "center", marginBottom: 26 },
+  kicker: {
+    fontSize: 11,
+    letterSpacing: "0.34em",
+    color: CYAN,
+    marginBottom: 12,
+  },
+  title: {
+    fontFamily: serif,
+    fontSize: "clamp(30px, 5vw, 52px)",
+    fontWeight: 600,
+    margin: "0 0 8px",
+    letterSpacing: "-0.01em",
+  },
+  sub: { color: MUTE, fontSize: 13, margin: 0, letterSpacing: "0.02em" },
+
+  stepper: {
+    display: "flex",
+    gap: 8,
+    flexWrap: "wrap",
+    justifyContent: "center",
+    maxWidth: 980,
+    margin: "0 auto 26px",
+  },
+  step: {
+    display: "flex",
+    alignItems: "center",
+    gap: 9,
+    background: "transparent",
+    border: `1px solid ${GRID}`,
+    color: MUTE,
+    padding: "9px 15px",
+    borderRadius: 999,
+    cursor: "pointer",
+    fontFamily: mono,
+    fontSize: 12,
+    transition: "all .2s",
+  },
+  stepActive: {
+    borderColor: CYAN,
+    color: INK,
+    background: "rgba(79,209,197,0.08)",
+    boxShadow: `0 0 0 1px ${CYAN}55`,
+  },
+  stepDone: { color: "#9fb0cc", borderColor: "#2c3f60" },
+  stepNum: {
+    fontWeight: 700,
+    fontSize: 11,
+    width: 18,
+    height: 18,
+    borderRadius: "50%",
+    display: "grid",
+    placeItems: "center",
+    background: "rgba(255,255,255,0.05)",
+  },
+  stepLabel: { whiteSpace: "nowrap" },
+
+  stageBoard: {
+    display: "flex",
+    gap: 22,
+    maxWidth: 1080,
+    margin: "0 auto",
+    flexWrap: "wrap",
+    alignItems: "stretch",
+  },
+  canvasWrap: {
+    flex: "1 1 560px",
+    minWidth: 320,
+    background: NAVY_2,
+    border: `1px solid ${GRID}`,
+    borderRadius: 16,
+    padding: 8,
+    boxShadow: "0 20px 60px -30px rgba(0,0,0,0.9)",
+  },
+  panel: {
+    flex: "1 1 280px",
+    minWidth: 260,
+    background: `linear-gradient(180deg, ${NAVY_2}, ${NAVY})`,
+    border: `1px solid ${GRID}`,
+    borderRadius: 16,
+    padding: "22px 22px",
+    display: "flex",
+    flexDirection: "column",
+  },
+  panelTag: {
+    fontSize: 10,
+    letterSpacing: "0.28em",
+    color: AMBER,
+    marginBottom: 14,
+  },
+  panelTitle: {
+    fontFamily: serif,
+    fontSize: 24,
+    fontWeight: 600,
+    margin: "0 0 12px",
+  },
+  panelNote: {
+    color: "#9fb0cc",
+    fontSize: 13,
+    lineHeight: 1.65,
+    margin: "0 0 18px",
+  },
+
+  readout: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 1,
+    borderTop: `1px solid ${GRID}`,
+    borderBottom: `1px solid ${GRID}`,
+    padding: "12px 0",
+    marginBottom: 18,
+  },
+  stat: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    padding: "6px 0",
+  },
+  statLabel: { fontSize: 11, color: MUTE, letterSpacing: "0.05em" },
+  statValue: { fontSize: 17, fontWeight: 700 },
+
+  sliderLabel: {
+    fontSize: 11,
+    color: MUTE,
+    letterSpacing: "0.05em",
+    marginBottom: 10,
+  },
+  slider: { width: "100%", marginBottom: 14 },
+  sweepBtn: {
+    width: "100%",
+    padding: "11px",
+    borderRadius: 10,
+    border: `1px solid ${CYAN}66`,
+    background: "rgba(79,209,197,0.08)",
+    color: CYAN,
+    fontFamily: mono,
+    fontSize: 13,
+    cursor: "pointer",
+    marginBottom: 14,
+    transition: "all .2s",
+  },
+  sweepBtnOn: {
+    background: CYAN,
+    color: NAVY,
+    fontWeight: 700,
+  },
+  hint: {
+    fontSize: 12,
+    color: MUTE,
+    lineHeight: 1.6,
+    marginBottom: 18,
+  },
+
+  nav: { display: "flex", gap: 10, marginTop: "auto" },
+  navBtn: {
+    flex: 1,
+    padding: "11px",
+    borderRadius: 10,
+    border: `1px solid ${GRID}`,
+    background: "transparent",
+    color: INK,
+    fontFamily: mono,
+    fontSize: 13,
+    cursor: "pointer",
+    transition: "all .15s",
+  },
+  navBtnPrimary: {
+    background: AMBER,
+    color: NAVY,
+    border: `1px solid ${AMBER}`,
+    fontWeight: 700,
+  },
+
+  axisTxt: {
+    fill: MUTE,
+    fontSize: 11,
+    fontFamily: mono,
+    textAnchor: "middle",
+  },
+  axisLbl: {
+    fill: MUTE,
+    fontSize: 11,
+    fontFamily: mono,
+    textAnchor: "end",
+    letterSpacing: "0.1em",
+  },
+  comTxt: {
+    fontSize: 11,
+    fontFamily: mono,
+    letterSpacing: "0.04em",
+  },
+  bigXi: {
+    fill: CYAN,
+    fontSize: 18,
+    fontFamily: mono,
+    fontWeight: 700,
+    textAnchor: "end",
+  },
+
+  specWrap: {
+    maxWidth: 1080,
+    margin: "22px auto 0",
+    background: NAVY_2,
+    border: `1px solid ${GRID}`,
+    borderRadius: 16,
+    padding: "16px 18px 8px",
+  },
+  specHead: {
+    fontSize: 10,
+    letterSpacing: "0.24em",
+    color: MUTE,
+    marginBottom: 8,
+  },
+
+  footer: {
+    maxWidth: 1080,
+    margin: "26px auto 0",
+    textAlign: "center",
+    color: "#5c6a86",
+    fontSize: 11,
+    letterSpacing: "0.04em",
+    lineHeight: 1.6,
+  },
+};
+
+const rootEl = document.getElementById('root');
+ReactDOM.createRoot(rootEl).render(<WindingMachine />);
+const boot = document.getElementById('boot');
+if (boot) boot.classList.add('gone');
+</script>
+</body>
+</html>
