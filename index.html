@@ -1,33 +1,4 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>The Winding Machine — Fourier Transform Intuition</title>
-<style>
-  html, body { margin: 0; padding: 0; background: #0a1224; }
-  #root { width: 100%; }
-  /* graceful loading state before React mounts */
-  #boot {
-    position: fixed; inset: 0; display: grid; place-items: center;
-    background: #0a1224; color: #7d8aa6;
-    font-family: 'Space Mono', ui-monospace, monospace; font-size: 13px;
-    letter-spacing: 0.2em;
-  }
-  #boot.gone { display: none; }
-</style>
-</head>
-<body>
-<div id="boot">LOADING THE WINDING MACHINE…</div>
-<div id="root"></div>
-
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-<script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef, useCallback, useMemo } = React;
-
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 
 // ---------------------------------------------------------------------------
 //  THE WINDING MACHINE — a Fourier transform intuition built step by step
@@ -48,84 +19,112 @@ const AMBER = "#f5b042";
 const CYAN = "#4fd1c5";
 const ROSE = "#f06a8a";
 
-// the signal: sum of two pure cosines. these are the "real" frequencies.
-const COMPONENTS = [
-  { freq: 2, amp: 1.0 },
-  { freq: 3, amp: 0.6 },
+// --- signal config ---------------------------------------------------------
+const DEFAULT_COMPONENTS = [
+  { id: 1, freq: 2, amp: 1.0 },
+  { id: 2, freq: 3, amp: 0.6 },
 ];
-const signal = (t) =>
-  COMPONENTS.reduce(
-    (s, c) => s + c.amp * Math.cos(2 * Math.PI * c.freq * t),
-    0
-  );
-const SIG_MAX = COMPONENTS.reduce((s, c) => s + c.amp, 0); // ~1.6
-
 const T_MAX = 4; // seconds of signal
 const SAMPLES = 900;
-const samples = Array.from({ length: SAMPLES }, (_, i) => {
-  const t = (i / (SAMPLES - 1)) * T_MAX;
-  return { t, v: signal(t) };
-});
+const SWEEP_PTS = 260;
+const SWEEP_MAX = 6.5;
+const FREQ_MIN = 0.5;
+const FREQ_MAX = 6;
+const AMP_MIN = 0.1;
+const AMP_MAX = 1.5;
 
-// center of mass of the wound graph at winding frequency xi
-function centerOfMass(xi) {
+// build the sampled signal for a given set of components
+function buildSamples(components) {
+  const sigMax = Math.max(
+    0.01,
+    components.reduce((s, c) => s + Math.abs(c.amp), 0)
+  );
+  const arr = new Array(SAMPLES);
+  for (let i = 0; i < SAMPLES; i++) {
+    const t = (i / (SAMPLES - 1)) * T_MAX;
+    let v = 0;
+    for (const c of components) v += c.amp * Math.cos(2 * Math.PI * c.freq * t);
+    arr[i] = { t, v };
+  }
+  return { samples: arr, sigMax };
+}
+
+// center of mass of the wound graph at winding frequency omega
+function centerOfMassOf(samples, sigMax, omega) {
   let cx = 0,
     cy = 0;
   for (let i = 0; i < SAMPLES; i++) {
     const { t, v } = samples[i];
-    const ang = -2 * Math.PI * xi * t; // e^{-2 pi i xi t}
-    const r = (v + SIG_MAX) / (2 * SIG_MAX); // remap to [0,1] so radius is positive
+    const ang = -2 * Math.PI * omega * t; // e^{-2 pi i omega t}
+    const r = (v + sigMax) / (2 * sigMax); // remap to [0,1] so radius is positive
     cx += r * Math.cos(ang);
     cy += r * Math.sin(ang);
   }
   return { x: cx / SAMPLES, y: cy / SAMPLES };
 }
 
-// full transform magnitude (x-coordinate of COM) across a frequency range
-const SWEEP_PTS = 260;
-const SWEEP_MAX = 5.5;
-const spectrum = Array.from({ length: SWEEP_PTS }, (_, i) => {
-  const xi = (i / (SWEEP_PTS - 1)) * SWEEP_MAX;
-  const c = centerOfMass(xi);
-  return { xi, mag: c.x };
-});
-const SPEC_MIN = Math.min(...spectrum.map((s) => s.mag));
-const SPEC_MAX = Math.max(...spectrum.map((s) => s.mag));
+function buildSpectrum(samples, sigMax) {
+  const out = new Array(SWEEP_PTS);
+  let lo = Infinity,
+    hi = -Infinity;
+  for (let i = 0; i < SWEEP_PTS; i++) {
+    const omega = (i / (SWEEP_PTS - 1)) * SWEEP_MAX;
+    const c = centerOfMassOf(samples, sigMax, omega);
+    if (c.x < lo) lo = c.x;
+    if (c.x > hi) hi = c.x;
+    out[i] = { omega, mag: c.x };
+  }
+  return { spectrum: out, specMin: lo, specMax: hi };
+}
 
 const STAGES = [
   {
     key: "RAW",
     label: "The signal",
     note:
-      "A signal in time. It hides two pure frequencies — the winding machine will find them.",
+      "A signal in time, built from a few hidden pure frequencies. The winding machine will find them.",
   },
   {
     key: "WIND",
     label: "Wrap it around a circle",
     note:
-      "Peel the wave off the time axis and wind it around the origin at winding frequency ξ. Each instant becomes a point f(t)·e^(−2πiξt).",
+      "Peel the wave off the time axis and wind it around the origin at winding frequency ω. Each instant becomes a point f(t)·e^(−2πiωt).",
   },
   {
     key: "COM",
     label: "Track the center of mass",
     note:
-      "Average all the wound points. Its x-coordinate is the strength of frequency ξ in the signal.",
+      "Average all the wound points. Its x-coordinate is the strength of frequency ω in the signal.",
   },
   {
     key: "SWEEP",
-    label: "Sweep ξ — the transform appears",
+    label: "Sweep ω — the transform appears",
     note:
-      "Slide the winding frequency. The center of mass drifts near zero, then lurches outward exactly when ξ matches a real frequency.",
+      "Slide the winding frequency. The center of mass drifts near zero, then lurches outward exactly when ω matches a real frequency in the signal.",
   },
 ];
 
-function WindingMachine() {
+export default function WindingMachine() {
   const [stage, setStage] = useState(0);
-  const [xi, setXi] = useState(0.6); // winding frequency
+  const [omega, setOmega] = useState(0.6); // winding frequency
   const [windT, setWindT] = useState(0); // 0 = straight, 1 = fully wound
   const [auto, setAuto] = useState(false);
+  const [components, setComponents] = useState(DEFAULT_COMPONENTS);
+  const nextId = useRef(
+    DEFAULT_COMPONENTS.reduce((m, c) => Math.max(m, c.id), 0) + 1
+  );
   const raf = useRef(0);
   const lastTime = useRef(0);
+
+  // recompute signal + spectrum whenever components change
+  const { samples, sigMax } = useMemo(
+    () => buildSamples(components),
+    [components]
+  );
+  const { spectrum, specMin, specMax } = useMemo(
+    () => buildSpectrum(samples, sigMax),
+    [samples, sigMax]
+  );
 
   // ---- animate the wind/unwind transition when the stage changes ----------
   const windRef = useRef(0); // authoritative current value
@@ -161,7 +160,7 @@ function WindingMachine() {
       if (!lastTime.current) lastTime.current = ts;
       const dt = (ts - lastTime.current) / 1000;
       lastTime.current = ts;
-      setXi((x) => {
+      setOmega((x) => {
         let nx = x + dt * 0.55;
         if (nx > SWEEP_MAX) nx = 0;
         return nx;
@@ -175,7 +174,32 @@ function WindingMachine() {
     };
   }, [auto, stage]);
 
-  const com = useMemo(() => centerOfMass(xi), [xi]);
+  const com = useMemo(
+    () => centerOfMassOf(samples, sigMax, omega),
+    [samples, sigMax, omega]
+  );
+
+  // component editor handlers ----------------------------------------------
+  const addComponent = () => {
+    if (components.length >= 5) return;
+    setComponents((cs) => [
+      ...cs,
+      { id: nextId.current++, freq: 4, amp: 0.5 },
+    ]);
+  };
+  const removeComponent = (id) =>
+    setComponents((cs) =>
+      cs.length <= 1 ? cs : cs.filter((c) => c.id !== id)
+    );
+  const updateComponent = (id, patch) =>
+    setComponents((cs) =>
+      cs.map((c) => (c.id === id ? { ...c, ...patch } : c))
+    );
+  const resetComponents = () => {
+    nextId.current =
+      DEFAULT_COMPONENTS.reduce((m, c) => Math.max(m, c.id), 0) + 1;
+    setComponents(DEFAULT_COMPONENTS);
+  };
 
   const stageObj = STAGES[stage];
 
@@ -212,9 +236,11 @@ function WindingMachine() {
       <div style={S.stageBoard}>
         <Visualization
           stage={stage}
-          xi={xi}
+          omega={omega}
           windT={windT}
           com={com}
+          samples={samples}
+          sigMax={sigMax}
         />
 
         {/* narration + controls ----------------------------------------- */}
@@ -228,8 +254,8 @@ function WindingMachine() {
           {stage >= 2 && (
             <div style={S.readout}>
               <Stat
-                label="winding ξ"
-                value={xi.toFixed(2) + " Hz"}
+                label="winding ω"
+                value={omega.toFixed(2) + " Hz"}
                 color={CYAN}
               />
               <Stat
@@ -249,17 +275,17 @@ function WindingMachine() {
           {stage >= 3 && (
             <>
               <label style={S.sliderLabel}>
-                winding frequency ξ — drag to hunt
+                winding frequency ω — drag to hunt
               </label>
               <input
                 type="range"
                 min={0}
                 max={SWEEP_MAX}
                 step={0.005}
-                value={xi}
+                value={omega}
                 onChange={(e) => {
                   setAuto(false);
-                  setXi(parseFloat(e.target.value));
+                  setOmega(parseFloat(e.target.value));
                 }}
                 style={S.slider}
                 className="wm-slider"
@@ -278,8 +304,19 @@ function WindingMachine() {
               </button>
               <div style={S.hint}>
                 Real frequencies live at{" "}
-                <b style={{ color: ROSE }}>2 Hz</b> and{" "}
-                <b style={{ color: ROSE }}>3 Hz</b>. Watch the spike land.
+                {components.map((c, i) => (
+                  <React.Fragment key={c.id}>
+                    <b style={{ color: ROSE }}>{c.freq.toFixed(2)} Hz</b>
+                    {i < components.length - 1
+                      ? components.length === 2
+                        ? " and "
+                        : i === components.length - 2
+                        ? ", and "
+                        : ", "
+                      : ""}
+                  </React.Fragment>
+                ))}
+                . Watch the spikes land.
               </div>
             </>
           )}
@@ -303,12 +340,29 @@ function WindingMachine() {
         </aside>
       </div>
 
-      {stage >= 3 && <SpectrumStrip xi={xi} />}
+      {/* component editor — the playground -------------------------------- */}
+      <ComponentEditor
+        components={components}
+        addComponent={addComponent}
+        removeComponent={removeComponent}
+        updateComponent={updateComponent}
+        resetComponents={resetComponents}
+      />
+
+      {stage >= 3 && (
+        <SpectrumStrip
+          omega={omega}
+          spectrum={spectrum}
+          specMin={specMin}
+          specMax={specMax}
+          components={components}
+        />
+      )}
 
       <footer style={S.footer}>
         <span>
-          signal · cos 2πt scaled + 0.6 cos 3πt&nbsp;·&nbsp;wound graph
-          radius is the signal amplitude at each instant
+          Build any signal you like above · the wound graph and the transform
+          react live · radius of the wound graph is the signal amplitude at each instant
         </span>
       </footer>
     </div>
@@ -316,9 +370,131 @@ function WindingMachine() {
 }
 
 // ---------------------------------------------------------------------------
+//  COMPONENT EDITOR — the playground
+// ---------------------------------------------------------------------------
+function ComponentEditor({
+  components,
+  addComponent,
+  removeComponent,
+  updateComponent,
+  resetComponents,
+}) {
+  return (
+    <div style={S.editor}>
+      <div style={S.editorHead}>
+        <div>
+          <div style={S.editorTag}>BUILD YOUR SIGNAL</div>
+          <div style={S.editorSub}>
+            f(t) = Σ aᵢ · cos(2π fᵢ t) &nbsp;·&nbsp; edit, add, remove. The
+            transform updates live.
+          </div>
+        </div>
+        <div style={S.editorBtns}>
+          <button
+            style={S.miniBtn}
+            onClick={resetComponents}
+            title="Restore defaults"
+          >
+            ↺ reset
+          </button>
+          <button
+            style={{
+              ...S.miniBtn,
+              ...S.miniBtnPrimary,
+              ...(components.length >= 5 ? S.miniBtnDisabled : {}),
+            }}
+            onClick={addComponent}
+            disabled={components.length >= 5}
+          >
+            + add component
+          </button>
+        </div>
+      </div>
+
+      <div style={S.editorList}>
+        {components.map((c, i) => (
+          <ComponentRow
+            key={c.id}
+            index={i}
+            component={c}
+            canRemove={components.length > 1}
+            onChange={(patch) => updateComponent(c.id, patch)}
+            onRemove={() => removeComponent(c.id)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ComponentRow({ index, component, canRemove, onChange, onRemove }) {
+  const swatch = COMPONENT_COLORS[index % COMPONENT_COLORS.length];
+  return (
+    <div style={S.row}>
+      <div style={{ ...S.rowSwatch, background: swatch }} />
+      <div style={S.rowLabel}>#{index + 1}</div>
+
+      <div style={S.rowField}>
+        <div style={S.rowFieldLabel}>
+          frequency&nbsp;
+          <span style={{ color: swatch }}>
+            {component.freq.toFixed(2)} Hz
+          </span>
+        </div>
+        <input
+          type="range"
+          min={FREQ_MIN}
+          max={FREQ_MAX}
+          step={0.05}
+          value={component.freq}
+          onChange={(e) =>
+            onChange({ freq: parseFloat(e.target.value) })
+          }
+          className="wm-slider"
+          style={S.rowSlider}
+        />
+      </div>
+
+      <div style={S.rowField}>
+        <div style={S.rowFieldLabel}>
+          amplitude&nbsp;
+          <span style={{ color: swatch }}>
+            {component.amp.toFixed(2)}
+          </span>
+        </div>
+        <input
+          type="range"
+          min={AMP_MIN}
+          max={AMP_MAX}
+          step={0.05}
+          value={component.amp}
+          onChange={(e) => onChange({ amp: parseFloat(e.target.value) })}
+          className="wm-slider"
+          style={S.rowSlider}
+        />
+      </div>
+
+      <button
+        style={{
+          ...S.rowRemove,
+          ...(canRemove ? {} : S.rowRemoveDisabled),
+        }}
+        onClick={onRemove}
+        disabled={!canRemove}
+        title={canRemove ? "remove component" : "at least one required"}
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
+const COMPONENT_COLORS = ["#4fd1c5", "#f5b042", "#f06a8a", "#a78bfa", "#7fd0e8"];
+
+// ---------------------------------------------------------------------------
 //  MAIN CANVAS
 // ---------------------------------------------------------------------------
-function Visualization({ stage, xi, windT, com }) {
+function Visualization({ stage, omega, windT, com, samples, sigMax }) {
   const W = 620,
     H = 470;
   const cx = W * 0.5,
@@ -340,11 +516,11 @@ function Visualization({ stage, xi, windT, com }) {
 
       // straight position
       const sx = axisX0 + frac * axisLen;
-      const sy = axisY - (v / SIG_MAX) * 70;
+      const sy = axisY - (v / sigMax) * 70;
 
       // wound position
-      const ang = -2 * Math.PI * xi * t;
-      const r = ((v + SIG_MAX) / (2 * SIG_MAX)) * R;
+      const ang = -2 * Math.PI * omega * t;
+      const r = ((v + sigMax) / (2 * sigMax)) * R;
       const wx = cx + r * Math.cos(ang);
       const wy = cy + r * Math.sin(ang);
 
@@ -353,7 +529,7 @@ function Visualization({ stage, xi, windT, com }) {
       pts.push([sx + (wx - sx) * e, sy + (wy - sy) * e]);
     }
     return pts;
-  }, [xi, windT]);
+  }, [omega, windT, samples, sigMax, axisLen, axisY, cx, cy]);
 
   const d = useMemo(
     () =>
@@ -537,7 +713,7 @@ function Visualization({ stage, xi, windT, com }) {
         {/* big readout in sweep mode ---------------------------------- */}
         {stage >= 3 && (
           <text x={W - 28} y={40} style={S.bigXi}>
-            ξ = {xi.toFixed(2)} Hz
+            ω = {omega.toFixed(2)} Hz
           </text>
         )}
       </svg>
@@ -548,25 +724,31 @@ function Visualization({ stage, xi, windT, com }) {
 // ---------------------------------------------------------------------------
 //  SPECTRUM STRIP — the assembled transform
 // ---------------------------------------------------------------------------
-function SpectrumStrip({ xi }) {
+function SpectrumStrip({ omega, spectrum, specMin, specMax, components }) {
   const W = 920,
     H = 150,
     pad = 38;
   const x = (f) => pad + (f / SWEEP_MAX) * (W - pad * 2);
   const y = (m) =>
-    H - 30 - ((m - SPEC_MIN) / (SPEC_MAX - SPEC_MIN || 1)) * (H - 56);
+    H - 30 - ((m - specMin) / (specMax - specMin || 1)) * (H - 56);
 
   const d = spectrum
-    .map((s, i) => `${i === 0 ? "M" : "L"}${x(s.xi)},${y(s.mag)}`)
+    .map((s, i) => `${i === 0 ? "M" : "L"}${x(s.omega)},${y(s.mag)}`)
     .join(" ");
-  const area = `${d} L${x(SWEEP_MAX)},${y(SPEC_MIN)} L${x(0)},${y(
-    SPEC_MIN
-  )} Z`;
+  const area = `${d} L${x(SWEEP_MAX)},${y(specMin)} L${x(0)},${y(specMin)} Z`;
+
+  // find current cursor value from the precomputed spectrum (lerp between points)
+  const idxF = (omega / SWEEP_MAX) * (spectrum.length - 1);
+  const i0 = Math.max(0, Math.min(spectrum.length - 1, Math.floor(idxF)));
+  const i1 = Math.min(spectrum.length - 1, i0 + 1);
+  const t = idxF - i0;
+  const cursorMag =
+    spectrum[i0].mag * (1 - t) + spectrum[i1].mag * t;
 
   return (
     <div style={S.specWrap}>
       <div style={S.specHead}>
-        ASSEMBLED TRANSFORM&nbsp;&nbsp;·&nbsp;&nbsp;center-of-mass x vs. winding ξ
+        ASSEMBLED TRANSFORM&nbsp;&nbsp;·&nbsp;&nbsp;center-of-mass x vs. winding ω
       </div>
       <svg
         viewBox={`0 0 ${W} ${H}`}
@@ -580,7 +762,7 @@ function SpectrumStrip({ xi }) {
           </linearGradient>
         </defs>
 
-        {[1, 2, 3, 4, 5].map((f) => (
+        {[1, 2, 3, 4, 5, 6].map((f) => (
           <g key={f}>
             <line
               x1={x(f)}
@@ -596,10 +778,10 @@ function SpectrumStrip({ xi }) {
           </g>
         ))}
 
-        {/* the two real frequencies */}
-        {COMPONENTS.map((c) => (
+        {/* the real frequencies as dashed rose lines */}
+        {components.map((c) => (
           <line
-            key={c.freq}
+            key={c.id}
             x1={x(c.freq)}
             y1={14}
             x2={x(c.freq)}
@@ -622,19 +804,14 @@ function SpectrumStrip({ xi }) {
 
         {/* live cursor */}
         <line
-          x1={x(xi)}
+          x1={x(omega)}
           y1={14}
-          x2={x(xi)}
+          x2={x(omega)}
           y2={H - 26}
           stroke={CYAN}
           strokeWidth="2"
         />
-        <circle
-          cx={x(xi)}
-          cy={y(centerOfMass(xi).x)}
-          r="5"
-          fill={CYAN}
-        />
+        <circle cx={x(omega)} cy={y(cursorMag)} r="5" fill={CYAN} />
       </svg>
     </div>
   );
@@ -901,6 +1078,98 @@ const S = {
     marginBottom: 8,
   },
 
+  // editor (build-your-own-signal panel) ----------------------------------
+  editor: {
+    maxWidth: 1080,
+    margin: "22px auto 0",
+    background: `linear-gradient(180deg, ${NAVY_2}, ${NAVY})`,
+    border: `1px solid ${GRID}`,
+    borderRadius: 16,
+    padding: "20px 22px 18px",
+  },
+  editorHead: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 16,
+    marginBottom: 14,
+    flexWrap: "wrap",
+  },
+  editorTag: {
+    fontSize: 10,
+    letterSpacing: "0.28em",
+    color: AMBER,
+    marginBottom: 6,
+  },
+  editorSub: { color: MUTE, fontSize: 12, lineHeight: 1.5 },
+  editorBtns: { display: "flex", gap: 8 },
+  miniBtn: {
+    padding: "8px 14px",
+    borderRadius: 8,
+    border: `1px solid ${GRID}`,
+    background: "transparent",
+    color: INK,
+    fontFamily: mono,
+    fontSize: 12,
+    cursor: "pointer",
+    transition: "all .15s",
+  },
+  miniBtnPrimary: {
+    background: AMBER,
+    color: NAVY,
+    border: `1px solid ${AMBER}`,
+    fontWeight: 700,
+  },
+  miniBtnDisabled: {
+    opacity: 0.4,
+    cursor: "not-allowed",
+  },
+  editorList: { display: "flex", flexDirection: "column", gap: 10 },
+  row: {
+    display: "flex",
+    alignItems: "center",
+    gap: 14,
+    padding: "10px 12px",
+    background: "rgba(255,255,255,0.025)",
+    border: `1px solid ${GRID}`,
+    borderRadius: 10,
+    flexWrap: "wrap",
+  },
+  rowSwatch: {
+    width: 10,
+    height: 28,
+    borderRadius: 3,
+    flexShrink: 0,
+  },
+  rowLabel: {
+    fontSize: 12,
+    color: MUTE,
+    fontFamily: mono,
+    minWidth: 28,
+  },
+  rowField: { flex: "1 1 200px", minWidth: 180 },
+  rowFieldLabel: {
+    fontSize: 11,
+    color: MUTE,
+    marginBottom: 4,
+    letterSpacing: "0.03em",
+  },
+  rowSlider: { width: "100%" },
+  rowRemove: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    border: `1px solid ${GRID}`,
+    background: "transparent",
+    color: MUTE,
+    fontFamily: mono,
+    fontSize: 14,
+    cursor: "pointer",
+    transition: "all .15s",
+    flexShrink: 0,
+  },
+  rowRemoveDisabled: { opacity: 0.3, cursor: "not-allowed" },
+
   footer: {
     maxWidth: 1080,
     margin: "26px auto 0",
@@ -911,11 +1180,3 @@ const S = {
     lineHeight: 1.6,
   },
 };
-
-const rootEl = document.getElementById('root');
-ReactDOM.createRoot(rootEl).render(<WindingMachine />);
-const boot = document.getElementById('boot');
-if (boot) boot.classList.add('gone');
-</script>
-</body>
-</html>
