@@ -1,4 +1,33 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>The Winding Machine — Fourier Transform Intuition</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0a1224; }
+  #root { width: 100%; }
+  /* graceful loading state before React mounts */
+  #boot {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    background: #0a1224; color: #7d8aa6;
+    font-family: 'Space Mono', ui-monospace, monospace; font-size: 13px;
+    letter-spacing: 0.2em;
+  }
+  #boot.gone { display: none; }
+</style>
+</head>
+<body>
+<div id="boot">LOADING THE WINDING MACHINE…</div>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
 
 // ---------------------------------------------------------------------------
 //  THE WINDING MACHINE — a Fourier transform intuition built step by step
@@ -104,7 +133,7 @@ const STAGES = [
   },
 ];
 
-export default function WindingMachine() {
+function WindingMachine() {
   const [stage, setStage] = useState(0);
   const [omega, setOmega] = useState(0.6); // winding frequency
   const [windT, setWindT] = useState(0); // 0 = straight, 1 = fully wound
@@ -1180,3 +1209,11 @@ const S = {
     lineHeight: 1.6,
   },
 };
+
+const rootEl = document.getElementById('root');
+ReactDOM.createRoot(rootEl).render(<WindingMachine />);
+const boot = document.getElementById('boot');
+if (boot) boot.classList.add('gone');
+</script>
+</body>
+</html>
